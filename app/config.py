@@ -8,5 +8,15 @@ class Settings(BaseSettings):
 
     model_config = {"env_file": ".env"}
 
+    @property
+    def database_url_fixed(self) -> str:
+        """Fix Railway's postgres:// URL to work with SQLAlchemy 2.0."""
+        url = self.database_url
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+        elif url.startswith("postgresql://") and "+psycopg2" not in url:
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        return url
+
 
 settings = Settings()

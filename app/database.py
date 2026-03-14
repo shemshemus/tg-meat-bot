@@ -5,7 +5,7 @@ from app.config import settings
 
 # Engine = the connection to your database
 # It manages a pool of connections under the hood
-engine = create_engine(settings.database_url)
+engine = create_engine(settings.database_url_fixed)
 
 # SessionLocal = a factory that creates new database sessions
 # autocommit=False: we control when to save (explicit > implicit)

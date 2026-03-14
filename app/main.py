@@ -11,12 +11,13 @@ from app.routes import analytics, marketing, orders, products
 
 logger = logging.getLogger(__name__)
 
-Base.metadata.create_all(bind=engine)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start the Telegram bot when the server starts, stop it when it shuts down."""
+    """Create tables and start the Telegram bot on startup."""
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created")
+
     bot_app = create_bot_app()
 
     if bot_app:
