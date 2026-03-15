@@ -40,7 +40,7 @@ def generate_rule_based(product: Product, tone: str) -> str:
     return template.format(
         name=product.name,
         category=product.category,
-        price=f"${product.price_per_kg:.2f}",
+        price=f"{product.price_per_kg:,.0f} ₸",
         description=product.description or "A premium product from our kitchen.",
         ingredients=product.ingredients or "the finest ingredients",
     )
@@ -61,7 +61,7 @@ def generate_with_ai(product: Product, tone: str) -> str:
             f"Write a short marketing post (2-3 sentences) for a food product.\n"
             f"Product: {product.name}\n"
             f"Category: {product.category}\n"
-            f"Price: ${product.price_per_kg:.2f}/kg\n"
+            f"Price: {product.price_per_kg:,.0f} ₸/kg\n"
             f"Description: {product.description}\n"
             f"Ingredients: {product.ingredients}\n"
             f"Tone: {tone}\n\n"
