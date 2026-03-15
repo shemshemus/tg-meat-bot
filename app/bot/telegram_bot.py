@@ -447,22 +447,34 @@ async def send_promo_post(context: ContextTypes.DEFAULT_TYPE):
     _last_promo_product_id = product.id
 
     tone = random.choice(PROMO_TONES)
-    marketing_text = ai_service.generate_post(product, tone)
 
-    promo_message = (
-        f"\U0001f525 {marketing_text}\n\n"
-        f"\U0001f4b0 {_format_price(product.price_per_kg)}/кг"
-    )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Заказать {product.name}", callback_data=f"order_{product.id}")]
-    ])
+    # Cache generated text per language to avoid duplicate AI calls
+    promo_texts: dict[str, str] = {}
+
+    ORDER_BTN_LABEL = {"ru": "Заказать", "en": "Order"}
 
     sent = 0
     for user_id in list(known_users):
+        lang = get_lang(user_id)
+
+        if lang not in promo_texts:
+            marketing_text = ai_service.generate_post(product, tone, language=lang)
+            promo_texts[lang] = (
+                f"\U0001f525 {marketing_text}\n\n"
+                f"\U0001f4b0 {_format_price(product.price_per_kg)}/кг"
+            )
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                f"{ORDER_BTN_LABEL.get(lang, ORDER_BTN_LABEL['ru'])} {product.name}",
+                callback_data=f"order_{product.id}",
+            )]
+        ])
+
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=promo_message,
+                text=promo_texts[lang],
                 reply_markup=keyboard,
             )
             sent += 1
