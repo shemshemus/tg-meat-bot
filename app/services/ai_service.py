@@ -1,5 +1,8 @@
 from app.config import settings
 from app.models.models import Product
+from app.services import cache_service
+
+MARKETING_TTL = 30 * 24 * 3600  # 30 days
 
 
 # ──────────────────────────────────────────────
@@ -125,7 +128,16 @@ def generate_with_ai(product: Product, tone: str, language: str = "ru") -> str:
 
 
 def generate_post(product: Product, tone: str, language: str = "ru") -> str:
-    """Main entry point. Uses AI if available, otherwise rule-based."""
+    """Main entry point. Returns cached text on hit, otherwise generates and caches."""
+    cache_key = f"marketing:{product.id}:{tone}:{language}"
+    cached = cache_service.cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     if settings.openai_api_key:
-        return generate_with_ai(product, tone, language)
-    return generate_rule_based(product, tone, language)
+        text = generate_with_ai(product, tone, language)
+    else:
+        text = generate_rule_based(product, tone, language)
+
+    cache_service.cache_set(cache_key, text, MARKETING_TTL)
+    return text

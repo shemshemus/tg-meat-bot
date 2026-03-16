@@ -5,13 +5,20 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.models import MarketingPost, Order, Product
 from app.schemas.schemas import AnalyticsSummary
+from app.services import cache_service
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
+
+ANALYTICS_TTL = 3600  # 1 hour
 
 
 @router.get("/summary", response_model=AnalyticsSummary)
 def get_summary(db: Session = Depends(get_db)):
-    """Return high-level business stats."""
+    """Return high-level business stats (cached for 1 hour)."""
+    cached = cache_service.cache_get("analytics:summary")
+    if cached is not None:
+        return AnalyticsSummary(**cached)
+
     total_products = db.query(func.count(Product.id)).scalar()
     total_orders = db.query(func.count(Order.id)).scalar()
     total_posts = db.query(func.count(MarketingPost.id)).scalar()
@@ -37,10 +44,13 @@ def get_summary(db: Session = Depends(get_db)):
         {"name": name, "order_count": count} for name, count in top_rows
     ]
 
-    return AnalyticsSummary(
+    summary = AnalyticsSummary(
         total_products=total_products,
         total_orders=total_orders,
         total_marketing_posts=total_posts,
         orders_by_status=orders_by_status,
         top_products=top_products,
     )
+
+    cache_service.cache_set("analytics:summary", summary.model_dump(), ANALYTICS_TTL)
+    return summary

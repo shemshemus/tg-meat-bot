@@ -5,9 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.bot.telegram_bot import create_bot_app
+from app.config import settings
 from app.database import Base, engine
 from app.models import models  # noqa: F401 — registers models with Base
 from app.routes import analytics, marketing, orders, products
+from app.services import cache_service
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,8 @@ async def lifespan(app: FastAPI):
     """Create tables and start the Telegram bot on startup."""
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created")
+
+    cache_service.init_redis(settings.redis_url)
 
     bot_app = create_bot_app()
 

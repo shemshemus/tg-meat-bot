@@ -17,14 +17,13 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models.models import Product
 from app.schemas.schemas import OrderCreate
-from app.services import ai_service, order_service, product_service
+from app.services import ai_service, cache_service, order_service, product_service
 
 logger = logging.getLogger(__name__)
 
-# Users who have interacted with the bot (for promo broadcasts)
-known_users: set[int] = set()
-
-# Avoid promoting the same product twice in a row
+# In-memory fallbacks (used when Redis is unavailable)
+_known_users: set[int] = set()
+_user_languages: dict[int, str] = {}
 _last_promo_product_id: int | None = None
 
 
@@ -101,11 +100,37 @@ MESSAGES = {
     },
 }
 
-user_languages: dict[int, str] = {}
+def _add_known_user(user_id: int) -> None:
+    _known_users.add(user_id)
+    cache_service.add_known_user(user_id)
+
+
+def _get_known_users() -> set[int]:
+    users = cache_service.get_known_users()
+    return users if users else _known_users
+
+
+def _set_user_language(user_id: int, lang: str) -> None:
+    _user_languages[user_id] = lang
+    cache_service.set_user_language(user_id, lang)
 
 
 def get_lang(user_id: int) -> str:
-    return user_languages.get(user_id, "ru")
+    lang = cache_service.get_user_language(user_id)
+    if lang:
+        return lang
+    return _user_languages.get(user_id, "ru")
+
+
+def _set_last_promo(product_id: int) -> None:
+    global _last_promo_product_id
+    _last_promo_product_id = product_id
+    cache_service.set_last_promo_product(product_id)
+
+
+def _get_last_promo() -> int | None:
+    val = cache_service.get_last_promo_product()
+    return val if val is not None else _last_promo_product_id
 
 
 def msg(key: str, user_id: int, **kwargs) -> str:
@@ -132,7 +157,7 @@ def _format_price(price: float) -> str:
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start — language selection."""
-    known_users.add(update.effective_user.id)
+    _add_known_user(update.effective_user.id)
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru"),
@@ -214,8 +239,8 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lang = query.data.replace("lang_", "")  # "ru" or "en"
     user_id = query.from_user.id
-    known_users.add(user_id)
-    user_languages[user_id] = lang
+    _add_known_user(user_id)
+    _set_user_language(user_id, lang)
 
     await query.edit_message_text(msg("lang_set", user_id))
     await query.message.reply_text(
@@ -371,7 +396,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Handle free-text messages — quantity input or free-text order."""
     text = update.message.text.strip()
     user_id = update.effective_user.id
-    known_users.add(user_id)
+    _add_known_user(user_id)
 
     # Scenario A: user typed quantity after clicking "Order" button
     pending_product_id = context.user_data.get("pending_product_id")
@@ -422,9 +447,9 @@ PROMO_TONES = ["friendly", "professional", "funny", "urgent"]
 
 async def send_promo_post(context: ContextTypes.DEFAULT_TYPE):
     """Send a promotional post about a random product to all known users."""
-    global _last_promo_product_id
+    users = _get_known_users()
 
-    if not known_users:
+    if not users:
         logger.info("Promo skipped — no known users yet")
         return
 
@@ -440,11 +465,12 @@ async def send_promo_post(context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Pick a random product, avoiding the last promoted one
-    candidates = [p for p in in_stock if p.id != _last_promo_product_id]
+    last_promo_id = _get_last_promo()
+    candidates = [p for p in in_stock if p.id != last_promo_id]
     if not candidates:
         candidates = in_stock
     product = random.choice(candidates)
-    _last_promo_product_id = product.id
+    _set_last_promo(product.id)
 
     tone = random.choice(PROMO_TONES)
 
@@ -454,7 +480,7 @@ async def send_promo_post(context: ContextTypes.DEFAULT_TYPE):
     ORDER_BTN_LABEL = {"ru": "Заказать", "en": "Order"}
 
     sent = 0
-    for user_id in list(known_users):
+    for user_id in list(users):
         lang = get_lang(user_id)
 
         if lang not in promo_texts:
