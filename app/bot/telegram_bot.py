@@ -15,7 +15,7 @@ from telegram.ext import (
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models.models import Product
+from app.models.models import Order, Product
 from app.schemas.schemas import OrderCreate
 from app.services import ai_service, cache_service, order_service, product_service
 
@@ -40,30 +40,36 @@ MESSAGES = {
         ),
         "products_btn": "🛒 Наши товары",
         "orders_btn": "📦 Мои заказы",
+        "back_btn": "◀️ Назад в меню",
         "products_header": "📋 Наши товары:\n",
         "no_products": "Сейчас нет товаров в наличии.",
         "order_btn": "Заказать",
         "price_usage": "Использование: /price название продукта",
         "price_not_found": 'Товар "{query}" не найден.\nИспользуйте /products чтобы посмотреть ассортимент.',
-        "enter_quantity": 'Сколько кг "{product}" вы хотите? Напишите число:',
+        "enter_quantity": 'Сколько штук "{product}" вы хотите? Напишите число:',
         "order_success": (
             "✅ Заказ оформлен!\n\n"
             "Товар: {product}\n"
-            "Количество: {qty} кг\n"
-            "Сумма: {total} ₸\n\n"
+            "Количество: {qty} шт\n"
+            "Сумма: {total}\n\n"
             "Мы скоро подтвердим ваш заказ!"
         ),
         "order_error": "Что-то пошло не так. Попробуйте ещё раз.",
         "not_understood": (
             "Не понял вас.\n\n"
-            'Попробуйте написать, например: "2 kg beef sausage"\n'
+            'Попробуйте написать, например: "2 beef sausage"\n'
             "Или нажмите /products чтобы посмотреть ассортимент."
         ),
         "order_more_btn": "🔄 Заказать ещё",
         "back_to_products_btn": "📋 К товарам",
-        "orders_coming_soon": "📦 История заказов скоро будет доступна!",
-        "invalid_quantity": "Пожалуйста, введите число (например, 2 или 1.5).",
+        "no_orders": "📦 У вас пока нет заказов.",
+        "orders_header": "📦 Ваши заказы:\n",
+        "invalid_quantity": "Пожалуйста, введите целое число (например, 1, 2 или 3).",
         "lang_set": "Язык установлен: 🇷🇺 Русский",
+        "status_new": "новый",
+        "status_confirmed": "подтверждён",
+        "status_completed": "выполнен",
+        "status_cancelled": "отменён",
     },
     "en": {
         "choose_lang": "Выберите язык / Choose your language:",
@@ -73,30 +79,36 @@ MESSAGES = {
         ),
         "products_btn": "🛒 See Products",
         "orders_btn": "📦 My Orders",
+        "back_btn": "◀️ Back to Menu",
         "products_header": "📋 Our products:\n",
         "no_products": "No products available right now.",
         "order_btn": "Order",
         "price_usage": "Usage: /price product name",
         "price_not_found": 'No product matching "{query}".\nUse /products to see what\'s available.',
-        "enter_quantity": 'How many kg of "{product}" would you like? Type a number:',
+        "enter_quantity": 'How many "{product}" would you like? Type a number:',
         "order_success": (
             "✅ Order placed!\n\n"
             "Product: {product}\n"
-            "Quantity: {qty} kg\n"
-            "Total: {total} ₸\n\n"
+            "Quantity: {qty}\n"
+            "Total: {total}\n\n"
             "We'll confirm your order soon!"
         ),
         "order_error": "Something went wrong. Please try again.",
         "not_understood": (
             "I didn't understand that.\n\n"
-            'Try something like: "2 kg beef sausage"\n'
+            'Try something like: "2 beef sausage"\n'
             "Or use /products to see what's available."
         ),
         "order_more_btn": "🔄 Order More",
         "back_to_products_btn": "📋 Back to Products",
-        "orders_coming_soon": "📦 Order history coming soon!",
-        "invalid_quantity": "Please enter a number (e.g. 2 or 1.5).",
+        "no_orders": "📦 You have no orders yet.",
+        "orders_header": "📦 Your orders:\n",
+        "invalid_quantity": "Please enter a whole number (e.g. 1, 2, or 3).",
         "lang_set": "Language set: 🇬🇧 English",
+        "status_new": "new",
+        "status_confirmed": "confirmed",
+        "status_completed": "completed",
+        "status_cancelled": "cancelled",
     },
 }
 
@@ -147,8 +159,19 @@ def _main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+def _back_button(user_id: int) -> list[InlineKeyboardButton]:
+    """Single-element list with a Back to Menu button."""
+    return [InlineKeyboardButton(msg("back_btn", user_id), callback_data="menu_main")]
+
+
 def _format_price(price: float) -> str:
     return f"{price:,.0f} ₸"
+
+
+def _status_label(status: str, user_id: int) -> str:
+    key = f"status_{status}"
+    lang = get_lang(user_id)
+    return MESSAGES[lang].get(key, status)
 
 
 # ──────────────────────────────────────────────
@@ -179,17 +202,21 @@ async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         in_stock = [p for p in products if p.in_stock]
 
         if not in_stock:
-            await update.message.reply_text(msg("no_products", user_id))
+            await update.message.reply_text(
+                msg("no_products", user_id),
+                reply_markup=InlineKeyboardMarkup([_back_button(user_id)]),
+            )
             return
 
         lines = []
         buttons = []
         for p in in_stock:
-            lines.append(f"• {p.name} ({p.category}) — {_format_price(p.price_per_kg)}/кг")
+            lines.append(f"• {p.name} ({p.category}) — {_format_price(p.price_per_kg)}")
             buttons.append([InlineKeyboardButton(
                 f"{msg('order_btn', user_id)} {p.name}",
                 callback_data=f"order_{p.id}",
             )])
+        buttons.append(_back_button(user_id))
 
         text = msg("products_header", user_id) + "\n".join(lines)
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -221,8 +248,9 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         await update.message.reply_text(
-            f"{match.name}: {_format_price(match.price_per_kg)}/кг\n"
-            f"{match.description or ''}"
+            f"{match.name}: {_format_price(match.price_per_kg)}\n"
+            f"{match.description or ''}",
+            reply_markup=InlineKeyboardMarkup([_back_button(user_id)]),
         )
     finally:
         db.close()
@@ -250,31 +278,41 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle main menu buttons (products / orders)."""
+    """Handle main menu buttons (products / orders / back to main)."""
     query = update.callback_query
     await query.answer()
 
     user_id = query.from_user.id
-    action = query.data  # "menu_products" or "menu_orders"
+    action = query.data
 
-    if action == "menu_products":
+    if action == "menu_main":
+        await query.edit_message_text(
+            msg("welcome", user_id),
+            reply_markup=_main_menu_keyboard(user_id),
+        )
+
+    elif action == "menu_products":
         db = SessionLocal()
         try:
             products = product_service.get_all(db)
             in_stock = [p for p in products if p.in_stock]
 
             if not in_stock:
-                await query.edit_message_text(msg("no_products", user_id))
+                await query.edit_message_text(
+                    msg("no_products", user_id),
+                    reply_markup=InlineKeyboardMarkup([_back_button(user_id)]),
+                )
                 return
 
             lines = []
             buttons = []
             for p in in_stock:
-                lines.append(f"• {p.name} ({p.category}) — {_format_price(p.price_per_kg)}/кг")
+                lines.append(f"• {p.name} ({p.category}) — {_format_price(p.price_per_kg)}")
                 buttons.append([InlineKeyboardButton(
                     f"{msg('order_btn', user_id)} {p.name}",
                     callback_data=f"order_{p.id}",
                 )])
+            buttons.append(_back_button(user_id))
 
             text = msg("products_header", user_id) + "\n".join(lines)
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -282,7 +320,52 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.close()
 
     elif action == "menu_orders":
-        await query.edit_message_text(msg("orders_coming_soon", user_id))
+        db = SessionLocal()
+        try:
+            orders = (
+                db.query(Order)
+                .filter(Order.telegram_user_id == str(user_id))
+                .order_by(Order.created_at.desc())
+                .limit(10)
+                .all()
+            )
+        finally:
+            db.close()
+
+        if not orders:
+            await query.edit_message_text(
+                msg("no_orders", user_id),
+                reply_markup=InlineKeyboardMarkup([_back_button(user_id)]),
+            )
+            return
+
+        lines = []
+        for o in orders:
+            db = SessionLocal()
+            try:
+                product = product_service.get_by_id(db, o.product_id)
+                product_name = product.name if product else f"#{o.product_id}"
+            finally:
+                db.close()
+
+            status = _status_label(o.status, user_id)
+            date_str = o.created_at.strftime("%d.%m.%Y") if o.created_at else ""
+            total = o.quantity_kg * (product.price_per_kg if product else 0)
+            lines.append(
+                f"• {product_name} x{int(o.quantity_kg)} — "
+                f"{_format_price(total)} [{status}] {date_str}"
+            )
+
+        text = msg("orders_header", user_id) + "\n".join(lines)
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    msg("products_btn", user_id), callback_data="menu_products"
+                )],
+                _back_button(user_id),
+            ]),
+        )
 
 
 async def order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -302,7 +385,10 @@ async def order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         db.close()
 
-    await query.edit_message_text(msg("enter_quantity", user_id, product=product_name))
+    await query.edit_message_text(
+        msg("enter_quantity", user_id, product=product_name),
+        reply_markup=InlineKeyboardMarkup([_back_button(user_id)]),
+    )
 
 
 # ──────────────────────────────────────────────
@@ -313,7 +399,7 @@ async def _place_order(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     product: Product,
-    quantity: float,
+    quantity: int,
 ):
     """Create order and send confirmation message."""
     user = update.effective_user
@@ -325,7 +411,7 @@ async def _place_order(
             customer_name=user.full_name or "",
             telegram_user_id=str(user.id),
             product_id=product.id,
-            quantity_kg=quantity,
+            quantity_kg=float(quantity),
         )
         order = order_service.create(db, order_data)
     finally:
@@ -339,8 +425,8 @@ async def _place_order(
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(msg("order_more_btn", user_id), callback_data="menu_products"),
-            InlineKeyboardButton(msg("back_to_products_btn", user_id), callback_data="menu_products"),
-        ]
+        ],
+        _back_button(user_id),
     ])
     await update.message.reply_text(
         msg("order_success", user_id, product=product.name, qty=quantity, total=_format_price(total)),
@@ -356,23 +442,23 @@ def parse_order_text(text: str, products: list[Product]) -> dict | None:
     """Try to extract quantity and product from free text.
 
     Examples:
-        "2 kg beef sausage"  → {"quantity_kg": 2.0, "product": <Product>}
-        "3.5kg chicken"      → {"quantity_kg": 3.5, "product": <Product>}
-        "beef sausage 1 kg"  → {"quantity_kg": 1.0, "product": <Product>}
+        "2 beef sausage"     → {"quantity": 2, "product": <Product>}
+        "3 chicken"          → {"quantity": 3, "product": <Product>}
+        "beef sausage 1"     → {"quantity": 1, "product": <Product>}
     """
     text_lower = text.lower().strip()
 
-    # Try to find a number followed by "kg" (or "kg" preceded by a number)
-    qty_match = re.search(r"(\d+\.?\d*)\s*kg", text_lower)
+    # Try to find a number (with optional "kg"/"шт" suffix for backwards compat)
+    qty_match = re.search(r"(\d+)\s*(?:kg|шт|pcs|x)?", text_lower)
     if not qty_match:
         return None
 
-    quantity = float(qty_match.group(1))
+    quantity = int(qty_match.group(1))
     if quantity <= 0:
         return None
 
     # Remove the quantity part to isolate the product name
-    remaining = re.sub(r"\d+\.?\d*\s*kg", "", text_lower).strip()
+    remaining = re.sub(r"\d+\s*(?:kg|шт|pcs|x)?", "", text_lower).strip()
 
     # Find the best matching product
     best_match = None
@@ -389,7 +475,7 @@ def parse_order_text(text: str, products: list[Product]) -> dict | None:
     if not best_match or best_score == 0:
         return None
 
-    return {"quantity_kg": quantity, "product": best_match}
+    return {"quantity": quantity, "product": best_match}
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -403,7 +489,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if pending_product_id:
         context.user_data.pop("pending_product_id")
         try:
-            quantity = float(text.replace(",", "."))
+            quantity = int(text.replace(",", ".").split(".")[0])
             if quantity <= 0:
                 raise ValueError
         except ValueError:
@@ -423,7 +509,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _place_order(update, context, product, quantity)
         return
 
-    # Scenario B: free-text order (e.g. "2 kg beef sausage")
+    # Scenario B: free-text order (e.g. "2 beef sausage")
     db = SessionLocal()
     try:
         products = product_service.get_all(db)
@@ -435,7 +521,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(msg("not_understood", user_id))
         return
 
-    await _place_order(update, context, parsed["product"], parsed["quantity_kg"])
+    await _place_order(update, context, parsed["product"], parsed["quantity"])
 
 
 # ──────────────────────────────────────────────
@@ -487,7 +573,7 @@ async def send_promo_post(context: ContextTypes.DEFAULT_TYPE):
             marketing_text = ai_service.generate_post(product, tone, language=lang)
             promo_texts[lang] = (
                 f"\U0001f525 {marketing_text}\n\n"
-                f"\U0001f4b0 {_format_price(product.price_per_kg)}/кг"
+                f"\U0001f4b0 {_format_price(product.price_per_kg)}"
             )
 
         keyboard = InlineKeyboardMarkup([
