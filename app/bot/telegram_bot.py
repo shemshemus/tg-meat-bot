@@ -3,7 +3,14 @@ import random
 import re
 from datetime import timedelta
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -47,12 +54,28 @@ MESSAGES = {
         "price_usage": "Использование: /price название продукта",
         "price_not_found": 'Товар "{query}" не найден.\nИспользуйте /products чтобы посмотреть ассортимент.',
         "enter_quantity": 'Сколько штук "{product}" вы хотите? Напишите число:',
+        "ask_phone": (
+            "📱 Для оформления заказа нам нужен ваш номер телефона.\n\n"
+            "Нажмите кнопку ниже, чтобы поделиться номером, "
+            "или введите его вручную:"
+        ),
+        "share_phone_btn": "📱 Поделиться номером",
+        "ask_address": "📍 Укажите адрес доставки:",
+        "confirm_saved_info": (
+            "📋 Используем сохранённые данные?\n\n"
+            "📱 Телефон: {phone}\n"
+            "📍 Адрес: {address}"
+        ),
+        "yes_btn": "✅ Да",
+        "change_btn": "✏️ Изменить",
         "order_success": (
             "✅ Заказ оформлен!\n\n"
             "Товар: {product}\n"
             "Количество: {qty} шт\n"
-            "Сумма: {total}\n\n"
-            "Мы скоро подтвердим ваш заказ!"
+            "Сумма: {total}\n"
+            "📱 Телефон: {phone}\n"
+            "📍 Адрес: {address}\n\n"
+            "Мы скоро свяжемся с вами!"
         ),
         "order_error": "Что-то пошло не так. Попробуйте ещё раз.",
         "not_understood": (
@@ -65,6 +88,7 @@ MESSAGES = {
         "no_orders": "📦 У вас пока нет заказов.",
         "orders_header": "📦 Ваши заказы:\n",
         "invalid_quantity": "Пожалуйста, введите целое число (например, 1, 2 или 3).",
+        "invalid_phone": "Пожалуйста, введите корректный номер телефона.",
         "lang_set": "Язык установлен: 🇷🇺 Русский",
         "status_new": "новый",
         "status_confirmed": "подтверждён",
@@ -86,12 +110,28 @@ MESSAGES = {
         "price_usage": "Usage: /price product name",
         "price_not_found": 'No product matching "{query}".\nUse /products to see what\'s available.',
         "enter_quantity": 'How many "{product}" would you like? Type a number:',
+        "ask_phone": (
+            "📱 We need your phone number to process the order.\n\n"
+            "Tap the button below to share your number, "
+            "or type it manually:"
+        ),
+        "share_phone_btn": "📱 Share Phone Number",
+        "ask_address": "📍 Enter your delivery address:",
+        "confirm_saved_info": (
+            "📋 Use your saved info?\n\n"
+            "📱 Phone: {phone}\n"
+            "📍 Address: {address}"
+        ),
+        "yes_btn": "✅ Yes",
+        "change_btn": "✏️ Change",
         "order_success": (
             "✅ Order placed!\n\n"
             "Product: {product}\n"
             "Quantity: {qty}\n"
-            "Total: {total}\n\n"
-            "We'll confirm your order soon!"
+            "Total: {total}\n"
+            "📱 Phone: {phone}\n"
+            "📍 Address: {address}\n\n"
+            "We'll contact you soon!"
         ),
         "order_error": "Something went wrong. Please try again.",
         "not_understood": (
@@ -104,6 +144,7 @@ MESSAGES = {
         "no_orders": "📦 You have no orders yet.",
         "orders_header": "📦 Your orders:\n",
         "invalid_quantity": "Please enter a whole number (e.g. 1, 2, or 3).",
+        "invalid_phone": "Please enter a valid phone number.",
         "lang_set": "Language set: 🇬🇧 English",
         "status_new": "new",
         "status_confirmed": "confirmed",
@@ -111,6 +152,12 @@ MESSAGES = {
         "status_cancelled": "cancelled",
     },
 }
+
+# Order flow states stored in context.user_data["order_step"]
+STEP_QUANTITY = "quantity"
+STEP_PHONE = "phone"
+STEP_ADDRESS = "address"
+
 
 def _add_known_user(user_id: int) -> None:
     _known_users.add(user_id)
@@ -143,6 +190,12 @@ def _set_last_promo(product_id: int) -> None:
 def _get_last_promo() -> int | None:
     val = cache_service.get_last_promo_product()
     return val if val is not None else _last_promo_product_id
+
+
+def _clear_order_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove all pending order data from user_data."""
+    for key in ("pending_product_id", "pending_quantity", "order_step", "pending_phone"):
+        context.user_data.pop(key, None)
 
 
 def msg(key: str, user_id: int, **kwargs) -> str:
@@ -180,6 +233,7 @@ def _status_label(status: str, user_id: int) -> str:
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start — language selection."""
+    _clear_order_state(context)
     _add_known_user(update.effective_user.id)
     keyboard = InlineKeyboardMarkup([
         [
@@ -195,6 +249,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /products — list all in-stock products with Order buttons."""
+    _clear_order_state(context)
     user_id = update.effective_user.id
     db = SessionLocal()
     try:
@@ -284,6 +339,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = query.from_user.id
     action = query.data
+    _clear_order_state(context)
 
     if action == "menu_main":
         await query.edit_message_text(
@@ -329,32 +385,27 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 .limit(10)
                 .all()
             )
-        finally:
-            db.close()
 
-        if not orders:
-            await query.edit_message_text(
-                msg("no_orders", user_id),
-                reply_markup=InlineKeyboardMarkup([_back_button(user_id)]),
-            )
-            return
+            if not orders:
+                await query.edit_message_text(
+                    msg("no_orders", user_id),
+                    reply_markup=InlineKeyboardMarkup([_back_button(user_id)]),
+                )
+                return
 
-        lines = []
-        for o in orders:
-            db = SessionLocal()
-            try:
+            lines = []
+            for o in orders:
                 product = product_service.get_by_id(db, o.product_id)
                 product_name = product.name if product else f"#{o.product_id}"
-            finally:
-                db.close()
-
-            status = _status_label(o.status, user_id)
-            date_str = o.created_at.strftime("%d.%m.%Y") if o.created_at else ""
-            total = o.quantity_kg * (product.price_per_kg if product else 0)
-            lines.append(
-                f"• {product_name} x{int(o.quantity_kg)} — "
-                f"{_format_price(total)} [{status}] {date_str}"
-            )
+                status = _status_label(o.status, user_id)
+                date_str = o.created_at.strftime("%d.%m.%Y") if o.created_at else ""
+                total = o.quantity_kg * (product.price_per_kg if product else 0)
+                lines.append(
+                    f"• {product_name} x{int(o.quantity_kg)} — "
+                    f"{_format_price(total)} [{status}] {date_str}"
+                )
+        finally:
+            db.close()
 
         text = msg("orders_header", user_id) + "\n".join(lines)
         await query.edit_message_text(
@@ -377,6 +428,7 @@ async def order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product_id = int(query.data.replace("order_", ""))
 
     context.user_data["pending_product_id"] = product_id
+    context.user_data["order_step"] = STEP_QUANTITY
 
     db = SessionLocal()
     try:
@@ -391,25 +443,91 @@ async def order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def confirm_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'Yes, use saved info' or 'Change' buttons."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    action = query.data  # "confirm_yes" or "confirm_change"
+
+    if action == "confirm_yes":
+        # Use saved phone and address
+        phone = cache_service.get_user_phone(user_id) or ""
+        address = cache_service.get_user_address(user_id) or ""
+        context.user_data["pending_phone"] = phone
+
+        await query.edit_message_text(
+            query.message.text + "\n\n✅",
+        )
+
+        await _place_order_final(update, context, phone, address)
+
+    elif action == "confirm_change":
+        # Ask for phone again
+        context.user_data["order_step"] = STEP_PHONE
+        await query.edit_message_text(query.message.text + "\n\n✏️")
+        await _ask_for_phone(update, context, user_id)
+
+
 # ──────────────────────────────────────────────
-# Order placement helper
+# Order flow helpers
 # ──────────────────────────────────────────────
 
-async def _place_order(
+async def _ask_for_phone(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Send a message asking for phone number with a Share Contact button."""
+    context.user_data["order_step"] = STEP_PHONE
+    keyboard = ReplyKeyboardMarkup(
+        [[KeyboardButton(msg("share_phone_btn", user_id), request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+    # Use the bot to send a new message (since we might be coming from a callback)
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=msg("ask_phone", user_id),
+        reply_markup=keyboard,
+    )
+
+
+async def _ask_for_address(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Send a message asking for delivery address."""
+    context.user_data["order_step"] = STEP_ADDRESS
+    await update.message.reply_text(
+        msg("ask_address", user_id),
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+async def _place_order_final(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    product: Product,
-    quantity: int,
+    phone: str,
+    address: str,
 ):
-    """Create order and send confirmation message."""
+    """Create the order in DB with all collected info."""
     user = update.effective_user
     user_id = user.id
 
+    product_id = context.user_data.get("pending_product_id")
+    quantity = context.user_data.get("pending_quantity", 1)
+
     db = SessionLocal()
     try:
+        product = product_service.get_by_id(db, product_id)
+        if not product:
+            chat_id = update.effective_chat.id
+            await context.bot.send_message(chat_id=chat_id, text=msg("order_error", user_id))
+            _clear_order_state(context)
+            return
+
         order_data = OrderCreate(
             customer_name=user.full_name or "",
-            telegram_user_id=str(user.id),
+            telegram_user_id=str(user_id),
+            telegram_username=user.username or "",
+            phone=phone,
+            delivery_address=address,
             product_id=product.id,
             quantity_kg=float(quantity),
         )
@@ -417,21 +535,53 @@ async def _place_order(
     finally:
         db.close()
 
+    _clear_order_state(context)
+
     if not order:
-        await update.message.reply_text(msg("order_error", user_id))
+        chat_id = update.effective_chat.id
+        await context.bot.send_message(chat_id=chat_id, text=msg("order_error", user_id))
         return
+
+    # Save phone and address for next time
+    cache_service.set_user_phone(user_id, phone)
+    cache_service.set_user_address(user_id, address)
 
     total = quantity * product.price_per_kg
     keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(msg("order_more_btn", user_id), callback_data="menu_products"),
-        ],
+        [InlineKeyboardButton(msg("order_more_btn", user_id), callback_data="menu_products")],
         _back_button(user_id),
     ])
-    await update.message.reply_text(
-        msg("order_success", user_id, product=product.name, qty=quantity, total=_format_price(total)),
+
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=msg(
+            "order_success", user_id,
+            product=product.name,
+            qty=quantity,
+            total=_format_price(total),
+            phone=phone,
+            address=address,
+        ),
         reply_markup=keyboard,
     )
+
+
+# ──────────────────────────────────────────────
+# Contact handler (Telegram Share Contact button)
+# ──────────────────────────────────────────────
+
+async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle shared contact — extract phone number for the order."""
+    user_id = update.effective_user.id
+
+    if context.user_data.get("order_step") != STEP_PHONE:
+        return
+
+    phone = update.message.contact.phone_number
+    context.user_data["pending_phone"] = phone
+
+    await _ask_for_address(update, context, user_id)
 
 
 # ──────────────────────────────────────────────
@@ -479,15 +629,34 @@ def parse_order_text(text: str, products: list[Product]) -> dict | None:
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle free-text messages — quantity input or free-text order."""
+    """Handle free-text messages — multi-step order flow or free-text order."""
     text = update.message.text.strip()
     user_id = update.effective_user.id
     _add_known_user(user_id)
 
-    # Scenario A: user typed quantity after clicking "Order" button
+    order_step = context.user_data.get("order_step")
+
+    # ── Step: user is typing phone number manually ──
+    if order_step == STEP_PHONE:
+        # Basic phone validation: digits, optional +, spaces, dashes
+        phone = re.sub(r"[\s\-()]", "", text)
+        if not re.match(r"^\+?\d{7,15}$", phone):
+            await update.message.reply_text(msg("invalid_phone", user_id))
+            return
+        context.user_data["pending_phone"] = phone
+        await _ask_for_address(update, context, user_id)
+        return
+
+    # ── Step: user is typing delivery address ──
+    if order_step == STEP_ADDRESS:
+        address = text
+        phone = context.user_data.get("pending_phone", "")
+        await _place_order_final(update, context, phone, address)
+        return
+
+    # ── Step: user is typing quantity after clicking "Order" button ──
     pending_product_id = context.user_data.get("pending_product_id")
-    if pending_product_id:
-        context.user_data.pop("pending_product_id")
+    if pending_product_id and order_step == STEP_QUANTITY:
         try:
             quantity = int(text.replace(",", ".").split(".")[0])
             if quantity <= 0:
@@ -496,20 +665,30 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(msg("invalid_quantity", user_id))
             return
 
-        db = SessionLocal()
-        try:
-            product = product_service.get_by_id(db, pending_product_id)
-        finally:
-            db.close()
+        context.user_data["pending_quantity"] = quantity
 
-        if not product:
-            await update.message.reply_text(msg("order_error", user_id))
-            return
+        # Check if we have saved contact info for this user
+        saved_phone = cache_service.get_user_phone(user_id)
+        saved_address = cache_service.get_user_address(user_id)
 
-        await _place_order(update, context, product, quantity)
+        if saved_phone and saved_address:
+            # Offer to reuse saved info
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(msg("yes_btn", user_id), callback_data="confirm_yes"),
+                    InlineKeyboardButton(msg("change_btn", user_id), callback_data="confirm_change"),
+                ]
+            ])
+            await update.message.reply_text(
+                msg("confirm_saved_info", user_id, phone=saved_phone, address=saved_address),
+                reply_markup=keyboard,
+            )
+        else:
+            # First-time user — ask for phone
+            await _ask_for_phone(update, context, user_id)
         return
 
-    # Scenario B: free-text order (e.g. "2 beef sausage")
+    # ── Scenario: free-text order (e.g. "2 beef sausage") ──
     db = SessionLocal()
     try:
         products = product_service.get_all(db)
@@ -521,7 +700,26 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(msg("not_understood", user_id))
         return
 
-    await _place_order(update, context, parsed["product"], parsed["quantity"])
+    # Start the order flow for free-text orders too
+    context.user_data["pending_product_id"] = parsed["product"].id
+    context.user_data["pending_quantity"] = parsed["quantity"]
+
+    saved_phone = cache_service.get_user_phone(user_id)
+    saved_address = cache_service.get_user_address(user_id)
+
+    if saved_phone and saved_address:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(msg("yes_btn", user_id), callback_data="confirm_yes"),
+                InlineKeyboardButton(msg("change_btn", user_id), callback_data="confirm_change"),
+            ]
+        ])
+        await update.message.reply_text(
+            msg("confirm_saved_info", user_id, phone=saved_phone, address=saved_address),
+            reply_markup=keyboard,
+        )
+    else:
+        await _ask_for_phone(update, context, user_id)
 
 
 # ──────────────────────────────────────────────
@@ -612,8 +810,10 @@ def create_bot_app() -> Application | None:
     app.add_handler(CommandHandler("products", products_command))
     app.add_handler(CommandHandler("price", price_command))
     app.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
+    app.add_handler(CallbackQueryHandler(confirm_info_callback, pattern="^confirm_"))
     app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_"))
     app.add_handler(CallbackQueryHandler(order_callback, pattern="^order_"))
+    app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     # Schedule promotional posts every 1.5 days, first run after 1 minute

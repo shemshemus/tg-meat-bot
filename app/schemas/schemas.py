@@ -55,6 +55,9 @@ class OrderCreate(BaseModel):
 
     customer_name: str = ""
     telegram_user_id: str = ""
+    telegram_username: str = ""
+    phone: str = ""
+    delivery_address: str = ""
     product_id: int
     quantity_kg: float = Field(gt=0)
     note: str = ""
@@ -66,6 +69,9 @@ class OrderResponse(BaseModel):
     id: int
     customer_name: str
     telegram_user_id: str
+    telegram_username: str
+    phone: str
+    delivery_address: str
     product_id: int
     quantity_kg: float
     note: str

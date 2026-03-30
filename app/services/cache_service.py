@@ -142,3 +142,45 @@ def get_last_promo_product() -> int | None:
     except Exception:
         logger.debug("get_last_promo_product failed")
         return None
+
+
+# ──────────────────────────────────────────────
+# User contact info (Redis hash: user:phones, user:addresses)
+# ──────────────────────────────────────────────
+
+def set_user_phone(user_id: int, phone: str) -> None:
+    try:
+        if not _client:
+            return
+        _client.hset("user:phones", str(user_id), phone)
+    except Exception:
+        logger.debug("set_user_phone failed for %s", user_id)
+
+
+def get_user_phone(user_id: int) -> str | None:
+    try:
+        if not _client:
+            return None
+        return _client.hget("user:phones", str(user_id))
+    except Exception:
+        logger.debug("get_user_phone failed for %s", user_id)
+        return None
+
+
+def set_user_address(user_id: int, address: str) -> None:
+    try:
+        if not _client:
+            return
+        _client.hset("user:addresses", str(user_id), address)
+    except Exception:
+        logger.debug("set_user_address failed for %s", user_id)
+
+
+def get_user_address(user_id: int) -> str | None:
+    try:
+        if not _client:
+            return None
+        return _client.hget("user:addresses", str(user_id))
+    except Exception:
+        logger.debug("get_user_address failed for %s", user_id)
+        return None
